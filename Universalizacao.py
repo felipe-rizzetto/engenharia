@@ -8,8 +8,17 @@ import os
 st.set_page_config(page_title="Painel Universalização", page_icon="📊", layout="wide")
 
 # --- CONFIGURAÇÃO DOS CAMINHOS ---
-CAMINHO_OBRA_LEAN = "Executado Obra Lean.xlsx"
-CAMINHO_UNIVERSALIZACAO = "Universalização 2026.xlsx"
+PASTA_LEAN = r""
+
+# Lista dos arquivos a serem lidos
+ARQUIVOS_LEAN = [
+    "UNIVERSALIZAÇÃO MACEIÓ (BACIA ICARAI) - Apontamentos.xlsx",
+    "UNIVERSALIZAÇÃO LARGO DA BATALHA _ BADU (BACIA ICARAI) - Apontamentos.xlsx",
+    "UNIVERSALIZAÇÃO ENGENHOCA (BACIA BARRETO) - Apontamentos.xlsx",
+    "UNIVERSALIZAÇÃO SANTA BÁRBARA (BACIA SAPÊ) - Apontamentos.xlsx"
+]
+
+CAMINHO_UNIVERSALIZACAO = r"Universalização 2026.xlsx"
 
 @st.cache_data
 def load_data():
@@ -29,13 +38,39 @@ def load_data():
         df_plan_ano = pd.DataFrame()
         df_plan_bacia = pd.DataFrame()
 
-    # --- 2. CARREGA EXECUTADO ---
-    if os.path.exists(CAMINHO_OBRA_LEAN):
-        try:
-            df_exec = pd.read_excel(CAMINHO_OBRA_LEAN, sheet_name='Tarefas') 
-        except:
-            df_exec = pd.read_excel(CAMINHO_OBRA_LEAN)
-            
+    # --- 2. CARREGA EXECUTADO (AGRUPADO NAS 3 BACIAS) ---
+    lista_dfs_exec = []
+    
+    for arquivo in ARQUIVOS_LEAN:
+        caminho_completo = os.path.join(PASTA_LEAN, arquivo)
+        
+        if os.path.exists(caminho_completo):
+            try:
+                df_temp = pd.read_excel(caminho_completo, sheet_name='Tarefas')
+                
+                # --- DEFINIÇÃO DA MACRO BACIA PELA NOMENCLATURA DO ARQUIVO ---
+                # Forçamos a classificação correta ignorando o que está escrito dentro da planilha se necessário
+                nome_arq = arquivo.upper()
+                bacia_detectada = "Outra"
+                
+                if 'ICARAI' in nome_arq:
+                    bacia_detectada = "Bacia Icaraí"
+                elif 'BARRETO' in nome_arq:
+                    bacia_detectada = "Bacia Barreto"
+                elif 'SAPÊ' in nome_arq or 'SAPE' in nome_arq:
+                    bacia_detectada = "Bacia Sapê"
+                
+                # Aplica a bacia detectada em todas as linhas desse arquivo
+                df_temp['Bacia_Macro'] = bacia_detectada
+                
+                lista_dfs_exec.append(df_temp)
+            except Exception as e:
+                st.warning(f"Erro ao ler arquivo {arquivo}: {e}")
+                continue
+    
+    if lista_dfs_exec:
+        df_exec = pd.concat(lista_dfs_exec, ignore_index=True)
+        
         if 'Data' in df_exec.columns:
             df_exec['Data'] = pd.to_datetime(df_exec['Data'], errors='coerce')
         
@@ -43,9 +78,6 @@ def load_data():
         for col in cols_num:
             if col in df_exec.columns:
                 df_exec[col] = pd.to_numeric(df_exec[col], errors='coerce').fillna(0)
-        
-        if 'Bacia' in df_exec.columns:
-            df_exec['Bacia'] = df_exec['Bacia'].fillna('N/A').astype(str)
     else:
         df_exec = pd.DataFrame()
 
@@ -54,8 +86,8 @@ def load_data():
 # Carrega Dados
 df_plan_ano, df_exec, df_plan_bacia = load_data()
 
-if df_plan_ano.empty:
-    st.warning("Dados de planejamento não encontrados.")
+if df_plan_ano.empty and df_exec.empty:
+    st.error("Nenhum dado encontrado.")
     st.stop()
 
 # ==========================================
@@ -64,27 +96,21 @@ if df_plan_ano.empty:
 st.sidebar.header("🎛️ Filtros do Painel")
 
 # 1. Filtro de Data
-# 1. Filtro de Data
-# Define as datas padrão solicitadas: 01/01/2025 e Hoje
 default_start = pd.to_datetime("2025-01-01").date()
 default_end = pd.Timestamp.now().date()
-
-st.sidebar.markdown("**Período**")
 c1, c2 = st.sidebar.columns(2)
-
-# O parâmetro 'value' define qual data já vem selecionada quando abre o painel
 d_ini = c1.date_input("Início", value=default_start)
 d_fim = c2.date_input("Fim", value=default_end)
 
-# 2. Filtro de Bacia
-lista_bacias = sorted(df_exec['Bacia'].unique()) if not df_exec.empty and 'Bacia' in df_exec.columns else []
-if not lista_bacias: lista_bacias = ["Sem Bacia Definida"]
+# 2. Filtro de Bacia (Macro)
+# Pega as bacias únicas que criamos (Icaraí, Barreto, Sapê)
+lista_bacias = sorted(df_exec['Bacia_Macro'].unique()) if not df_exec.empty and 'Bacia_Macro' in df_exec.columns else []
 sel_bacia = st.sidebar.multiselect("Filtrar Bacia", lista_bacias, default=lista_bacias)
 
 # Aplica Filtros
 if not df_exec.empty:
     mask_date = (df_exec['Data'].dt.date >= d_ini) & (df_exec['Data'].dt.date <= d_fim)
-    mask_bacia = df_exec['Bacia'].isin(sel_bacia) if sel_bacia else [True] * len(df_exec)
+    mask_bacia = df_exec['Bacia_Macro'].isin(sel_bacia) if sel_bacia else [True] * len(df_exec)
     df_exec_filtered = df_exec[mask_date & mask_bacia].copy()
 else:
     df_exec_filtered = pd.DataFrame()
@@ -116,7 +142,6 @@ total_lne_exec = df_exec_filtered['Ligações (und)'].sum() if not df_exec_filte
 pct_rede = (total_rede_exec / total_rede_plan * 100) if total_rede_plan > 0 else 0
 
 st.markdown("""<style>div[data-testid="metric-container"] {background-color: #f0f2f6; border: 1px solid #d6d6d6; padding: 10px; border-radius: 5px;}</style>""", unsafe_allow_html=True)
-
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1: st.metric("Previsto Rede (Período)", f"{total_rede_plan:,.0f}".replace(",", "."))
 with col2: st.metric("Previsto LNE (Período)", f"{total_lne_plan:,.0f}".replace(",", "."))
@@ -130,83 +155,90 @@ st.markdown("---")
 st.subheader("📈 Evolução Acumulada (Período Selecionado)")
 if not df_plan_ano_filtered.empty:
     df_chart_plan = df_plan_ano_filtered[['Data', 'Rede Acumulado']].sort_values('Data')
-    
     if not df_exec_filtered.empty:
         df_exec_filtered['Mes_Ano'] = df_exec_filtered['Data'].dt.to_period('M').dt.to_timestamp()
         df_exec_monthly = df_exec_filtered.groupby('Mes_Ano')['Extensão (m)'].sum().reset_index().sort_values('Mes_Ano')
         df_exec_monthly['Executado Acumulado'] = df_exec_monthly['Extensão (m)'].cumsum()
     else:
         df_exec_monthly = pd.DataFrame()
-
     fig_line = go.Figure()
     fig_line.add_trace(go.Scatter(x=df_chart_plan['Data'], y=df_chart_plan['Rede Acumulado'], mode='lines+markers', name='Previsto Acum.', line=dict(color='blue')))
     if not df_exec_monthly.empty:
         fig_line.add_trace(go.Scatter(x=df_exec_monthly['Mes_Ano'], y=df_exec_monthly['Executado Acumulado'], mode='lines+markers', name='Executado Acum.', line=dict(color='green'), fill='tozeroy'))
-
     fig_line.update_layout(height=400, xaxis_title="Mês", yaxis_title="Metros (m)", hovermode="x unified")
     st.plotly_chart(fig_line, use_container_width=True)
 
-# --- GRÁFICO 2: BARRAS (Extensão de Rede) ---
-st.subheader("📊 Extensão de Rede por Bacia")
+# --- GRÁFICO 2: BARRAS (AGRUPADO POR 3 BACIAS) ---
+st.subheader("📊 Comparativo por Macro Bacia")
+
+# 1. Preparar Dados de Planejamento (Agrupar colunas do Excel nas 3 Bacias)
+# O Excel tem colunas como: "Maceió (Bacia Icaraí)", "Engenhoca (Bacia Barreto)"
+bacias_alvo = ["Bacia Icaraí", "Bacia Barreto", "Bacia Sapê"]
+plan_bacia_agrupado = {b: 0.0 for b in bacias_alvo}
 
 if not df_plan_bacia.empty:
-    bacia_plan_totals = {}
-    cols_bacia = [c for c in df_plan_bacia.columns if c != 'Mês']
-    
-    for col in cols_bacia:
-        incluir = False
-        if not sel_bacia: incluir = True
-        else:
-             for b in sel_bacia:
-                 if b.lower() in col.lower(): incluir = True; break
-        if incluir: bacia_plan_totals[col] = df_plan_bacia[col].sum()
+    cols_plan = [c for c in df_plan_bacia.columns if c != 'Mês']
+    for col in cols_plan:
+        valor_coluna = df_plan_bacia[col].sum()
+        col_lower = col.lower()
+        
+        # Lógica de Agrupamento
+        if "icaraí" in col_lower or "icarai" in col_lower:
+            plan_bacia_agrupado["Bacia Icaraí"] += valor_coluna
+        elif "barreto" in col_lower:
+            plan_bacia_agrupado["Bacia Barreto"] += valor_coluna
+        elif "sapê" in col_lower or "sape" in col_lower:
+            plan_bacia_agrupado["Bacia Sapê"] += valor_coluna
 
-    bacia_exec_totals = {key: 0.0 for key in bacia_plan_totals.keys()}
-    if not df_exec_filtered.empty and 'Sub Bacia' in df_exec_filtered.columns:
-        df_exec_group = df_exec_filtered.groupby(['Sub Bacia'])['Extensão (m)'].sum().reset_index()
-        for _, row in df_exec_group.iterrows():
-            sub = str(row['Sub Bacia']).strip()
-            val = row['Extensão (m)']
-            for plan_col in bacia_plan_totals.keys():
-                if sub.lower() in plan_col.lower(): bacia_exec_totals[plan_col] += val; break
+# 2. Preparar Dados de Execução (Já temos a coluna Bacia_Macro correta)
+exec_bacia_agrupado = {b: 0.0 for b in bacias_alvo}
+if not df_exec_filtered.empty:
+    # Agrupa pelo nome da Bacia Macro criada na leitura
+    df_group = df_exec_filtered.groupby('Bacia_Macro')['Extensão (m)'].sum().reset_index()
+    for _, row in df_group.iterrows():
+        bacia = row['Bacia_Macro']
+        if bacia in exec_bacia_agrupado:
+            exec_bacia_agrupado[bacia] = row['Extensão (m)']
 
-    if bacia_plan_totals:
-        df_bacia_comp = pd.DataFrame({
-            'Bacia': list(bacia_plan_totals.keys()),
-            'Previsto': list(bacia_plan_totals.values()),
-            'Executado': [bacia_exec_totals.get(k, 0) for k in bacia_plan_totals.keys()]
-        }).sort_values('Previsto', ascending=True)
+# 3. Filtrar apenas o que foi selecionado no Multiselect
+keys_final = []
+if sel_bacia:
+    keys_final = [b for b in bacias_alvo if b in sel_bacia]
+else:
+    keys_final = bacias_alvo
 
-        fig_bar = go.Figure()
-        fig_bar.add_trace(go.Bar(y=df_bacia_comp['Bacia'], x=df_bacia_comp['Previsto'], name='Previsto', orientation='h', marker_color='blue', text=df_bacia_comp['Previsto'].apply(lambda x: f"{x:,.0f}"), textposition='auto'))
-        fig_bar.add_trace(go.Bar(y=df_bacia_comp['Bacia'], x=df_bacia_comp['Executado'], name='Executado', orientation='h', marker_color='green', text=df_bacia_comp['Executado'].apply(lambda x: f"{x:,.0f}"), textposition='auto'))
-        fig_bar.update_layout(barmode='group', height=500, legend=dict(orientation="h", y=1.1, x=0))
-        st.plotly_chart(fig_bar, use_container_width=True)
+# 4. Montar DataFrame Final para o Gráfico
+df_bacia_comp = pd.DataFrame({
+    'Bacia': keys_final,
+    'Previsto': [plan_bacia_agrupado[k] for k in keys_final],
+    'Executado': [exec_bacia_agrupado[k] for k in keys_final]
+})
 
-# --- TABELA SIMPLIFICADA (SOLICITADA) ---
+fig_bar = go.Figure()
+fig_bar.add_trace(go.Bar(y=df_bacia_comp['Bacia'], x=df_bacia_comp['Previsto'], name='Previsto', orientation='h', marker_color='blue', text=df_bacia_comp['Previsto'].apply(lambda x: f"{x:,.0f}"), textposition='auto'))
+fig_bar.add_trace(go.Bar(y=df_bacia_comp['Bacia'], x=df_bacia_comp['Executado'], name='Executado', orientation='h', marker_color='green', text=df_bacia_comp['Executado'].apply(lambda x: f"{x:,.0f}"), textposition='auto'))
+fig_bar.update_layout(barmode='group', height=400, legend=dict(orientation="h", y=1.1, x=0))
+st.plotly_chart(fig_bar, use_container_width=True)
+
+# --- TABELA SIMPLIFICADA (APENAS 3 BACIAS) ---
 st.markdown("---")
-st.subheader("📋 Resumo Executado por Bacia (Obra Lean)")
+st.subheader("📋 Detalhamento Executado: Macro Bacias")
 
 if not df_exec_filtered.empty:
-    # Seleciona apenas as colunas necessárias para o agrupamento
-    # Soma Extensão e Ligações por Bacia
-    cols_sum = []
-    if 'Extensão (m)' in df_exec_filtered.columns: cols_sum.append('Extensão (m)')
-    if 'Ligações (und)' in df_exec_filtered.columns: cols_sum.append('Ligações (und)')
+    # Agrupa APENAS pela Bacia Macro
+    df_tabela = df_exec_filtered.groupby('Bacia_Macro')[['Extensão (m)', 'Ligações (und)']].sum().reset_index()
     
-    if 'Bacia' in df_exec_filtered.columns and cols_sum:
-        df_tabela = df_exec_filtered.groupby('Bacia')[cols_sum].sum().reset_index()
-        
-        # Formatação e Exibição
-        st.dataframe(
-            df_tabela.style.format({
-                'Extensão (m)': '{:,.2f}', 
-                'Ligações (und)': '{:,.0f}'
-            }),
-            use_container_width=True,
-            height=500
-        )
-    else:
-        st.error("Colunas 'Bacia', 'Extensão (m)' ou 'Ligações (und)' não encontradas no arquivo executado.")
+    df_tabela.columns = ['Bacia', 'Extensão Executada (m)', 'Ligações Executadas (und)']
+    df_tabela = df_tabela.sort_values('Bacia')
+    
+    st.dataframe(
+        df_tabela.style.format({
+            'Extensão Executada (m)': '{:,.2f}', 
+            'Ligações Executadas (und)': '{:,.0f}'
+        }),
+        use_container_width=True,
+        height=300, # Tabela menor pois tem poucas linhas agora
+        hide_index=True 
+    )
 else:
-    st.info("Nenhum dado executado encontrado para os filtros selecionados.")
+    st.info("Nenhum dado encontrado para os filtros selecionados.")
